@@ -12,9 +12,10 @@ O **my-dou** é uma ferramenta de automação para download de arquivos do Diár
 - **Configuração:** Variáveis de ambiente via `.env` (usando `python-dotenv`).
 
 ## Estrutura de Arquivos Principal
-- `main.py`: Ponto de entrada da CLI (comandos: `dates`, `files`, `pdf`, `zip`).
+- `main.py`: Ponto de entrada da CLI (comandos: `dates`, `files`, `pdf`, `zip`, `mre`).
 - `inlabs_client.py`: Core do projeto. Contém a classe `InlabsClient` que gerencia a sessão, login via Playwright e lógica de download.
-- `tests/`: Suíte de testes unitários com fixtures HTML para garantir >90% de cobertura isolada da rede.
+- `xml_processor.py`: Módulo especializado em processamento de arquivos XML do DOU, incluindo busca por padrões (como publicações do MRE).
+- `tests/`: Suíte de testes unitários com fixtures HTML/XML para garantir >90% de cobertura isolada da rede.
 
 ## Comandos Úteis
 
@@ -43,6 +44,9 @@ uv run python main.py pdf 2026-04-08
 
 # Baixar ZIPs (XML) de seções específicas
 uv run python main.py zip 2026-04-08 --sections DO1,DO2
+
+# Buscar e opcionalmente baixar publicações do MRE em XMLs
+uv run python main.py mre 2026-04-08 --download
 ```
 
 ## Convenções de Desenvolvimento

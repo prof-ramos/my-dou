@@ -64,6 +64,11 @@ uv run python main.py pdf 2026-04-08
 uv run python main.py zip 2026-04-08 --sections DO1,DO2
 ```
 
+### Buscar publicações do MRE em arquivos XML
+```bash
+uv run python main.py mre 2026-04-08 --download
+```
+
 ## 🧪 Testes
 
 O projeto utiliza `pytest` para testes unitários isolados da rede.
