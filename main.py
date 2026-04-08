@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from inlabs_client import InlabsClient, InlabsError
+from xml_processor import XMLProcessor
 
 
 def cmd_dates(client: InlabsClient, args: argparse.Namespace) -> None:
@@ -56,6 +58,42 @@ def cmd_zip(client: InlabsClient, args: argparse.Namespace) -> None:
         print("\nNenhum arquivo encontrado para essa data.")
 
 
+def cmd_mre(client: InlabsClient, args: argparse.Namespace) -> None:
+    """Busca publicações do Ministério das Relações Exteriores em uma data específica."""
+    output_dir = Path(args.output)
+    zip_files = list(output_dir.glob(f"{args.date}-*.zip"))
+
+    if not zip_files and args.download:
+        print(f"ZIPs não encontrados para {args.date} no diretório {output_dir}. Baixando...")
+        zip_files = client.download_zip(args.date, output_dir=output_dir)
+
+    if not zip_files:
+        print(f"Nenhum arquivo ZIP encontrado para {args.date}. Use --download para baixar.")
+        return
+
+    processor = XMLProcessor()
+    found_count = 0
+    print(f"Buscando publicações do MRE em {len(zip_files)} arquivo(s) ZIP...\n")
+
+    for zip_path in zip_files:
+        print(f"  Processando {zip_path.name}...")
+        for article in processor.filter_by_org(zip_path, "Ministério das Relações Exteriores"):
+            found_count += 1
+            print("\n" + "=" * 80)
+            print(f"ID:        {article['id']}")
+            print(f"TIPO:      {article['type']}")
+            print(f"CATEGORIA: {article['category']}")
+            print(f"TÍTULO:    {article['title']}")
+            print(f"EMENTA:    {article['ementa']}")
+            print(f"ARQUIVO:   {zip_path.name}/{article['xml_name']}")
+
+    if found_count == 0:
+        print("\nNenhuma publicação do MRE encontrada nesta data.")
+    else:
+        print("\n" + "=" * 80)
+        print(f"Total de publicações encontradas: {found_count}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Download de arquivos DOU via portal INLABS"
@@ -90,6 +128,13 @@ def main() -> None:
         "-s", "--sections", help="Seções separadas por vírgula (DO1,DO2,DO3,DO1E,DO2E,DO3E)"
     )
 
+    # mre
+    sub_mre = subparsers.add_parser("mre", help="Busca publicações do MRE")
+    sub_mre.add_argument("date", help="Data no formato YYYY-MM-DD")
+    sub_mre.add_argument(
+        "--download", action="store_true", help="Baixar ZIPs se não existirem localmente"
+    )
+
     args = parser.parse_args()
 
     try:
@@ -105,6 +150,8 @@ def main() -> None:
             cmd_pdf(client, args)
         elif args.command == "zip":
             cmd_zip(client, args)
+        elif args.command == "mre":
+            cmd_mre(client, args)
 
     except InlabsError as e:
         print(f"Erro: {e}", file=sys.stderr)
