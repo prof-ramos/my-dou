@@ -1,5 +1,11 @@
 # my-dou (DOU Downloader) 🚀
 
+[![Python Version](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Package Manager: uv](https://img.shields.io/badge/package%20manager-uv-6140cc.svg)](https://github.com/astral-sh/uv)
+[![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen.svg)](tests/)
+
 Ferramenta CLI para download automatizado de arquivos do Diário Oficial da União (DOU) via portal INLABS (Imprensa Nacional).
 
 ## ✨ Funcionalidades

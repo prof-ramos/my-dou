@@ -44,6 +44,12 @@ The content is organized as follows:
   settings.local.json
 .gemini/
   settings.json
+tests/
+  fixtures/
+    dates.html
+    files.html
+  test_inlabs_client.py
+.coverage
 .gitignore
 .python-version
 explore_api.py
@@ -86,60 +92,219 @@ This section contains the contents of the repository's files.
 }
 </file>
 
-<file path="GEMINI.md">
-# Projeto: my-dou (DOU Downloader)
+<file path="tests/fixtures/dates.html">
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Fixture Dates</title>
+</head>
+<body>
+    <a href="index.php?p=2026-04-08">2026-04-08</a>
+    <a href="?p=2026-04-07">2026-04-07</a>
+    <a href="/index.php?p=2026-04-06">2026-04-06</a>
+</body>
+</html>
+</file>
 
-## Visão Geral
-O **my-dou** é uma ferramenta de automação para download de arquivos do Diário Oficial da União (DOU) através do portal INLABS (Imprensa Nacional). O projeto foca em extrair PDFs assinados e arquivos XML (em formato ZIP) de forma programática.
+<file path="tests/fixtures/files.html">
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Fixture Files</title>
+</head>
+<body>
+    <table>
+        <tr>
+            <td>
+                <div class="div_arquivo_download">
+                    <a href="?p=2026-04-08&amp;dl=2026_04_08_ASSINADO_do1.pdf" target="_blank" rel="noopener noreferrer" title="Clique para fazer o Download do arquivo">
+                        <i class="fa fa-download"></i> 2026_04_08_ASSINADO_do1.pdf
+                    </a>
+                </div>
+            </td>
+            <td> 5.2 MB </td>
+            <td> 08/04/2026 04:00:00 </td>
+        </tr>
+    </table>
+</body>
+</html>
+</file>
 
-### Arquitetura e Tecnologias
-- **Linguagem:** Python (>= 3.13)
-- **Gerenciador de Pacotes:** `uv` (utiliza `pyproject.toml` e `uv.lock`)
-- **Autenticação:** Híbrida. Usa **Playwright (Chromium)** em modo headless para realizar o login e contornar proteções de fingerprinting TLS, transferindo os cookies de sessão para o `requests`.
-- **Downloads e Listagem:** `requests` para maior eficiência após a autenticação.
-- **Configuração:** Variáveis de ambiente via `.env` (usando `python-dotenv`).
+<file path="tests/test_inlabs_client.py">
+from __future__ import annotations
 
-## Estrutura de Arquivos Principal
-- `main.py`: Ponto de entrada da CLI (comandos: `dates`, `files`, `pdf`, `zip`).
-- `inlabs_client.py`: Core do projeto. Contém a classe `InlabsClient` que gerencia a sessão, login via Playwright e lógica de download.
-- `inlabs_login.py`: Script auxiliar de teste para validação de login.
-- `explore_api.py`: Script de exploração de endpoints do portal INLABS.
-- `downloads/`: Diretório padrão para os arquivos baixados (ignorado pelo Git).
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-## Comandos Úteis
+import pytest
 
-### Ambiente e Dependências
-```bash
-# Sincronizar ambiente e instalar dependências
-uv sync
+from inlabs_client import InlabsClient, InlabsError
 
-# Instalar navegadores necessários para o Playwright
-uv run playwright install chromium
-```
+@pytest.fixture
+def client():
+    """Retorna um InlabsClient sem instanciar usando as vars reais de ambiente."""
+    return InlabsClient(email="test@inlabs.gov.br", password="senha_super_segura")
 
-### Execução da CLI
-```bash
-# Listar as últimas 10 datas disponíveis
-uv run python main.py dates
+def test_init(client):
+    assert client._email == "test@inlabs.gov.br"
+    assert client._password == "senha_super_segura"
+    assert "User-Agent" in client._session.headers
 
-# Listar arquivos de uma data específica
-uv run python main.py files 2026-04-08
+def test_from_env(mocker):
+    mocker.patch("os.getenv", side_effect=lambda k, d="": {
+        "INLABS_EMAIL": "env@test.com",
+        "INLABS_PASSWORD": "env_password"
+    }.get(k, d))
+    mocker.patch("inlabs_client.load_dotenv")
+    
+    client = InlabsClient.from_env()
+    assert client._email == "env@test.com"
+    assert client._password == "env_password"
 
-# Baixar PDFs assinados de uma data
-uv run python main.py pdf 2026-04-08
+def test_from_env_missing(mocker):
+    mocker.patch("os.getenv", return_value="")
+    mocker.patch("inlabs_client.load_dotenv")
+    
+    with pytest.raises(InlabsError, match="Configure INLABS_EMAIL e INLABS_PASSWORD"):
+        InlabsClient.from_env()
 
-# Baixar ZIPs (XML) de seções específicas
-uv run python main.py zip 2026-04-08 --sections DO1,DO2
-```
+def test_session_cookie(client):
+    client._session.cookies.set("inlabs_session_cookie", "test_cookie")
+    assert client.session_cookie == "test_cookie"
 
-## Convenções de Desenvolvimento
-- **Python:** Sempre use `from __future__ import annotations`.
-- **Tipagem:** Utilize Type Hints em todas as funções e métodos públicos.
-- **Linting:** Prefira `ruff` para formatação e linting.
-- **Segurança:** Nunca versionar o arquivo `.env` ou a pasta `.omc/`. As credenciais `INLABS_EMAIL` e `INLABS_PASSWORD` devem ser mantidas localmente.
+def test_list_available_dates(client, mocker):
+    """Verifica se o parser do BeautifulSoup extrai as datas corretamente."""
+    html_content = (Path(__file__).parent / "fixtures" / "dates.html").read_text()
+    
+    mock_get = mocker.patch.object(client._session, "get")
+    mock_get.return_value = MagicMock(status_code=200, text=html_content)
+    
+    dates = client.list_available_dates()
+    assert dates == ["2026-04-08", "2026-04-07", "2026-04-06"]
 
-## Integrações MCP
-- **Context7:** Utilize o MCP `context7-mcp` para consultar documentações de bibliotecas como `playwright`, `curl-cffi` ou `requests` quando necessário.
+def test_list_files(client, mocker):
+    """Verifica se a extração de nomes de arquivos, datas e tamanhos está correta."""
+    html_content = (Path(__file__).parent / "fixtures" / "files.html").read_text()
+    
+    mock_get = mocker.patch.object(client._session, "get")
+    mock_get.return_value = MagicMock(status_code=200, text=html_content)
+    
+    files = client.list_files("2026-04-08")
+    assert len(files) == 1
+    f = files[0]
+    assert f["name"] == "2026_04_08_ASSINADO_do1.pdf"
+    assert f["size"] == "5.2 MB"
+
+def test_error_status_code(client, mocker):
+    mock_get = mocker.patch.object(client._session, "get")
+    mock_get.return_value = MagicMock(status_code=502)
+    with pytest.raises(InlabsError, match="Erro ao listar datas: 502"):
+        client.list_available_dates()
+
+def test_download_file_success(client, mocker, tmp_path):
+    mock_get = mocker.patch.object(client._session, "get")
+    mock_get.return_value = MagicMock(status_code=200, content=b"fake pdf content", headers={})
+    
+    res = client._download_file("http://url", "test.pdf", tmp_path, {})
+    assert res == tmp_path / "test.pdf"
+    assert res.read_bytes() == b"fake pdf content"
+
+def test_download_file_404(client, mocker, tmp_path):
+    mock_get = mocker.patch.object(client._session, "get")
+    mock_get.return_value = MagicMock(status_code=404)
+    res = client._download_file("http://url", "test.pdf", tmp_path, {})
+    assert res is None
+
+def test_download_file_error_html(client, mocker, tmp_path):
+    mock_get = mocker.patch.object(client._session, "get")
+    mock_get.return_value = MagicMock(status_code=200, headers={"Content-Type": "text/html"})
+    res = client._download_file("http://url", "test.pdf", tmp_path, {})
+    assert res is None
+
+def test_download_pdf(client, mocker, tmp_path):
+    client._session.cookies.set("inlabs_session_cookie", "valid_cookie")
+    mocker.patch.object(client, "_download_file", return_value=tmp_path / "file.pdf")
+    
+    downloaded = client.download_pdf("2026-04-08", sections=["do1"], output_dir=tmp_path, include_extras=False)
+    assert len(downloaded) == 1
+    assert downloaded[0] == tmp_path / "file.pdf"
+
+def test_download_pdf_no_auth(client):
+    with pytest.raises(InlabsError, match="Não autenticado"):
+        client.download_pdf("2026-04-08")
+
+def test_download_zip(client, mocker, tmp_path):
+    client._session.cookies.set("inlabs_session_cookie", "valid_cookie")
+    mocker.patch.object(client, "_download_file", return_value=tmp_path / "file.zip")
+    
+    downloaded = client.download_zip("2026-04-08", sections=["DO1"], output_dir=tmp_path)
+    assert len(downloaded) == 1
+
+def test_login_retry_logic(client, mocker):
+    # Mock do _do_login_playwright para falhar 2 vezes e depois ter sucesso
+    mock_do_login = mocker.patch.object(client, "_do_login_playwright")
+    mock_do_login.side_effect = [Exception("Fail 1"), Exception("Fail 2"), None]
+    
+    client.login()
+    assert mock_do_login.call_count == 3
+
+def test_login_fails_after_retries(client, mocker):
+    mock_do_login = mocker.patch.object(client, "_do_login_playwright")
+    mock_do_login.side_effect = Exception("Permanent Fail")
+    
+    with pytest.raises(Exception, match="Permanent Fail"):
+        client.login()
+
+def test_do_login_playwright_mocked(client, mocker):
+    # Mock complexo do Playwright
+    mock_pw = mocker.patch("playwright.sync_api.sync_playwright")
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    
+    mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+    
+    # Simular sucesso no login
+    mock_page.content.return_value = "<html><body>Sair</body></html>"
+    mock_context.cookies.return_value = [{"name": "inlabs_session_cookie", "value": "secret"}]
+    
+    client._do_login_playwright()
+    assert client.session_cookie == "secret"
+
+def test_do_login_maintenance(client, mocker):
+    mock_pw = mocker.patch("playwright.sync_api.sync_playwright")
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    
+    mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+    
+    # Simular manutenção no goto ou no content
+    mock_page.content.return_value = "Sistema em Manutenção"
+    
+    with pytest.raises(InlabsError, match="Sistema em manutenção"):
+        client._do_login_playwright()
+
+def test_do_login_invalid_creds(client, mocker):
+    mock_pw = mocker.patch("playwright.sync_api.sync_playwright")
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    
+    mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+    
+    mock_page.content.return_value = "Senha incorreta"
+    
+    with pytest.raises(InlabsError, match="Credenciais inválidas"):
+        client._do_login_playwright()
 </file>
 
 <file path=".python-version">
@@ -334,6 +499,64 @@ for c in session.cookies:
     print(f"  {c.name} = {c.value[:40]}... (domain={c.domain}, path={c.path})")
 </file>
 
+<file path="GEMINI.md">
+# Projeto: my-dou (DOU Downloader)
+
+## Visão Geral
+O **my-dou** é uma ferramenta de automação para download de arquivos do Diário Oficial da União (DOU) através do portal INLABS (Imprensa Nacional). O projeto foca em extrair PDFs assinados e arquivos XML (em formato ZIP) de forma programática.
+
+### Arquitetura e Tecnologias
+- **Linguagem:** Python (>= 3.13)
+- **Gerenciador de Pacotes:** `uv` (utiliza `pyproject.toml` e `uv.lock`)
+- **Autenticação:** Híbrida. Usa **Playwright (Chromium)** em modo headless para realizar o login e contornar proteções de fingerprinting TLS, transferindo os cookies de sessão para o `requests`.
+- **Parsing:** BeautifulSoup (bs4) com parser `lxml` para extração resiliente de dados do HTML (DOM).
+- **Downloads e Listagem:** `requests` para maior eficiência após a autenticação.
+- **Configuração:** Variáveis de ambiente via `.env` (usando `python-dotenv`).
+
+## Estrutura de Arquivos Principal
+- `main.py`: Ponto de entrada da CLI (comandos: `dates`, `files`, `pdf`, `zip`).
+- `inlabs_client.py`: Core do projeto. Contém a classe `InlabsClient` que gerencia a sessão, login via Playwright e lógica de download.
+- `tests/`: Suíte de testes unitários com fixtures HTML para garantir >90% de cobertura isolada da rede.
+
+## Comandos Úteis
+
+### Ambiente e Testes
+```bash
+# Sincronizar ambiente e instalar dependências
+uv sync
+
+# Instalar navegadores necessários para o Playwright
+uv run playwright install chromium
+
+# Executar testes unitários
+uv run pytest
+```
+
+### Execução da CLI
+```bash
+# Listar as últimas 10 datas disponíveis
+uv run python main.py dates
+
+# Listar arquivos de uma data específica
+uv run python main.py files 2026-04-08
+
+# Baixar PDFs assinados de uma data
+uv run python main.py pdf 2026-04-08
+
+# Baixar ZIPs (XML) de seções específicas
+uv run python main.py zip 2026-04-08 --sections DO1,DO2
+```
+
+## Convenções de Desenvolvimento
+- **Python:** Sempre use `from __future__ import annotations`.
+- **Tipagem:** Utilize Type Hints em todas as funções e métodos públicos.
+- **Linting:** Prefira `ruff` para formatação e linting.
+- **Segurança:** Nunca versionar o arquivo `.env` ou a pasta `.omc/`. As credenciais `INLABS_EMAIL` e `INLABS_PASSWORD` devem ser mantidas localmente.
+
+## Integrações MCP
+- **Context7:** Utilize o MCP `context7-mcp` para consultar documentações de bibliotecas como `playwright`, `curl-cffi` ou `requests` quando necessário.
+</file>
+
 <file path="inlabs_login.py">
 """Script de login no portal INLABS (Imprensa Nacional) via terminal."""
 
@@ -525,10 +748,6 @@ if __name__ == "__main__":
     main()
 </file>
 
-<file path="README.md">
-
-</file>
-
 <file path=".gitignore">
 # Python-generated files
 __pycache__/
@@ -547,6 +766,83 @@ wheels/
 # Agent session state
 .omc/
 downloads/
+</file>
+
+<file path="README.md">
+# my-dou (DOU Downloader) 🚀
+
+Ferramenta CLI para download automatizado de arquivos do Diário Oficial da União (DOU) via portal INLABS (Imprensa Nacional).
+
+## ✨ Funcionalidades
+
+- **Download Híbrido:** Usa Playwright para autenticação (bypass de TLS fingerprinting) e `requests` para downloads eficientes.
+- **Resiliência:** Extração de dados via BeautifulSoup (DOM) em vez de Regex.
+- **Formatos Suportados:** PDFs assinados e arquivos XML (ZIP).
+- **Cobertura Completa:** Suporte a edições extras (letras A-Z) e todas as seções (DO1, DO2, DO3, etc.).
+- **Segurança:** Gestão de credenciais via variáveis de ambiente (.env).
+- **Qualidade:** Suíte de testes unitários com >90% de cobertura.
+
+## 🛠️ Requisitos
+
+- Python >= 3.13
+- [uv](https://github.com/astral-sh/uv) (gerenciador de pacotes)
+
+## 🚀 Instalação
+
+1. Clone o repositório:
+   ```bash
+   git clone https://github.com/prof-ramos/my-dou.git
+   cd my-dou
+   ```
+
+2. Instale as dependências e configure o ambiente:
+   ```bash
+   uv sync
+   uv run playwright install chromium
+   ```
+
+3. Configure as credenciais no arquivo `.env`:
+   ```bash
+   echo "INLABS_EMAIL=seu_email@exemplo.com" > .env
+   echo "INLABS_PASSWORD=sua_senha" >> .env
+   ```
+
+## 📖 Uso
+
+### Listar datas disponíveis
+```bash
+uv run python main.py dates
+```
+
+### Listar arquivos de uma data específica
+```bash
+uv run python main.py files 2026-04-08
+```
+
+### Baixar PDFs assinados
+```bash
+uv run python main.py pdf 2026-04-08
+```
+
+### Baixar arquivos XML (ZIP)
+```bash
+uv run python main.py zip 2026-04-08 --sections DO1,DO2
+```
+
+## 🧪 Testes
+
+O projeto utiliza `pytest` para testes unitários isolados da rede.
+```bash
+uv run pytest
+```
+
+Para ver o relatório de cobertura:
+```bash
+uv run pytest --cov=inlabs_client
+```
+
+## 📄 Licença
+Este projeto é de uso educacional e profissional para automação de processos de clipping e monitoramento oficial.
 </file>
 
 <file path="inlabs_client.py">
@@ -581,6 +877,9 @@ ZipSection = Literal["DO1", "DO2", "DO3", "DO1E", "DO2E", "DO3E"]
 PDF_SECTIONS: list[PdfSection] = ["do1", "do2", "do3"]
 ZIP_SECTIONS: list[ZipSection] = ["DO1", "DO2", "DO3", "DO1E", "DO2E", "DO3E"]
 PDF_EXTRA_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Padrão de data YYYY-MM-DD
+DATE_RE = re.compile(r"\?p=(\d{4}-\d{2}-\d{2})")
 
 
 class InlabsError(Exception):
@@ -623,8 +922,6 @@ class InlabsClient:
 
     def login(self) -> None:
         """Autentica no portal INLABS via Playwright headless. Retry automático."""
-        from playwright.sync_api import sync_playwright
-
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             try:
@@ -641,6 +938,7 @@ class InlabsClient:
         from playwright.sync_api import sync_playwright
 
         print("Autenticando via browser headless...")
+        cookies: list[dict[str, str]] = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -659,7 +957,6 @@ class InlabsClient:
 
                 # Verificar se não está em manutenção
                 if "Manutenção" in page.content():
-                    browser.close()
                     raise InlabsError("Sistema em manutenção.")
 
                 # O formulário de "Acessar" é o segundo form (índice 1)
@@ -703,8 +1000,8 @@ class InlabsClient:
         soup = BeautifulSoup(resp.text, "lxml")
         
         dates = []
-        for a in soup.find_all("a", href=re.compile(r"\?p=(\d{4}-\d{2}-\d{2})")):
-            match = re.search(r"\?p=(\d{4}-\d{2}-\d{2})", a.get("href", ""))
+        for a in soup.find_all("a", href=DATE_RE):
+            match = DATE_RE.search(a.get("href", ""))
             if match:
                 dates.append(match.group(1))
         return sorted(set(dates), reverse=True)
@@ -881,6 +1178,18 @@ dependencies = [
     "playwright>=1.58.0",
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
 ]
 </file>
 
