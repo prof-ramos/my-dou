@@ -1,0 +1,887 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.claude/
+  settings.local.json
+.gemini/
+  settings.json
+.gitignore
+.python-version
+explore_api.py
+GEMINI.md
+inlabs_client.py
+inlabs_login.py
+main.py
+pyproject.toml
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".claude/settings.local.json">
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la ~/.onepassword*)",
+      "Bash(brew install:*)",
+      "Bash(/opt/homebrew/bin/brew install:*)",
+      "Bash(op:*)",
+      "Bash(grep -n \"op plugin\\\\|brew.*alias\\\\|alias.*brew\" ~/.zshrc ~/.oh-my-zsh/custom/*.zsh ~/.zsh_aliases ~/.zprofile ~/.bash_profile)",
+      "Bash(grep -rn 'alias brew' ~/.zsh* ~/.zprofile ~/.zlogin ~/.zenv ~/.config/op/)",
+      "Bash(alias brew:*)",
+      "Bash(unalias brew:*)"
+    ]
+  }
+}
+</file>
+
+<file path=".gemini/settings.json">
+{
+  "mcpServers": {
+    "context7-mcp": {
+      "url": "https://server.smithery.ai/upstash/context7-mcp/mcp",
+      "type": "http"
+    }
+  }
+}
+</file>
+
+<file path="GEMINI.md">
+# Projeto: my-dou (DOU Downloader)
+
+## Visão Geral
+O **my-dou** é uma ferramenta de automação para download de arquivos do Diário Oficial da União (DOU) através do portal INLABS (Imprensa Nacional). O projeto foca em extrair PDFs assinados e arquivos XML (em formato ZIP) de forma programática.
+
+### Arquitetura e Tecnologias
+- **Linguagem:** Python (>= 3.13)
+- **Gerenciador de Pacotes:** `uv` (utiliza `pyproject.toml` e `uv.lock`)
+- **Autenticação:** Híbrida. Usa **Playwright (Chromium)** em modo headless para realizar o login e contornar proteções de fingerprinting TLS, transferindo os cookies de sessão para o `requests`.
+- **Downloads e Listagem:** `requests` para maior eficiência após a autenticação.
+- **Configuração:** Variáveis de ambiente via `.env` (usando `python-dotenv`).
+
+## Estrutura de Arquivos Principal
+- `main.py`: Ponto de entrada da CLI (comandos: `dates`, `files`, `pdf`, `zip`).
+- `inlabs_client.py`: Core do projeto. Contém a classe `InlabsClient` que gerencia a sessão, login via Playwright e lógica de download.
+- `inlabs_login.py`: Script auxiliar de teste para validação de login.
+- `explore_api.py`: Script de exploração de endpoints do portal INLABS.
+- `downloads/`: Diretório padrão para os arquivos baixados (ignorado pelo Git).
+
+## Comandos Úteis
+
+### Ambiente e Dependências
+```bash
+# Sincronizar ambiente e instalar dependências
+uv sync
+
+# Instalar navegadores necessários para o Playwright
+uv run playwright install chromium
+```
+
+### Execução da CLI
+```bash
+# Listar as últimas 10 datas disponíveis
+uv run python main.py dates
+
+# Listar arquivos de uma data específica
+uv run python main.py files 2026-04-08
+
+# Baixar PDFs assinados de uma data
+uv run python main.py pdf 2026-04-08
+
+# Baixar ZIPs (XML) de seções específicas
+uv run python main.py zip 2026-04-08 --sections DO1,DO2
+```
+
+## Convenções de Desenvolvimento
+- **Python:** Sempre use `from __future__ import annotations`.
+- **Tipagem:** Utilize Type Hints em todas as funções e métodos públicos.
+- **Linting:** Prefira `ruff` para formatação e linting.
+- **Segurança:** Nunca versionar o arquivo `.env` ou a pasta `.omc/`. As credenciais `INLABS_EMAIL` e `INLABS_PASSWORD` devem ser mantidas localmente.
+
+## Integrações MCP
+- **Context7:** Utilize o MCP `context7-mcp` para consultar documentações de bibliotecas como `playwright`, `curl-cffi` ou `requests` quando necessário.
+</file>
+
+<file path=".python-version">
+3.13
+</file>
+
+<file path="explore_api.py">
+"""Explora e cataloga todos os endpoints úteis do portal INLABS para automação de DOU."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE = "https://inlabs.in.gov.br"
+ACCESS_URL = f"{BASE}/acessar.php"
+LOGIN_URL = f"{BASE}/logar.php"
+
+email = __import__("os").getenv("INLABS_EMAIL")
+password = __import__("os").getenv("INLABS_PASSWORD")
+
+session = requests.Session()
+session.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/146.0.0.0 Safari/537.36"
+    ),
+})
+
+# Login
+print("=" * 60)
+print("1. LOGIN")
+print("=" * 60)
+r = session.get(ACCESS_URL)
+print(f"  GET {ACCESS_URL} -> {r.status_code} (cookies: {list(session.cookies.keys())})")
+
+r = session.post(LOGIN_URL, data={"email": email, "password": password}, allow_redirects=False)
+print(f"  POST {LOGIN_URL} -> {r.status_code}")
+print(f"  Location: {r.headers.get('location', 'N/A')}")
+print(f"  Set-Cookie: {[c.name for c in session.cookies]}")
+
+# Seguir redirects manualmente para capturar tudo
+url = r.headers.get("location", "")
+while url:
+    if not url.startswith("http"):
+        url = BASE + "/" + url.lstrip("/")
+    print(f"  GET {url} -> ", end="")
+    r = session.get(url, allow_redirects=False)
+    print(f"{r.status_code}")
+    url = r.headers.get("location", "")
+
+# Página principal (listagem de datas)
+print()
+print("=" * 60)
+print("2. PÁGINA PRINCIPAL - Listagem de datas")
+print("=" * 60)
+r = session.get(f"{BASE}/index.php?p=")
+print(f"  GET {BASE}/index.php?p= -> {r.status_code} ({len(r.text)} bytes)")
+
+# Extrair datas disponíveis
+datas = re.findall(r'index\.php\?p=(\d{4}-\d{2}-\d{2})', r.text)
+datas = sorted(set(datas), reverse=True)
+print(f"  Datas encontradas: {len(datas)}")
+print(f"  Mais recente: {datas[0] if datas else 'N/A'}")
+print(f"  Mais antiga: {datas[-1] if datas else 'N/A'}")
+
+# Extrair tamanhos
+tamanhos = re.findall(r'(\d{4}-\d{2}-\d{2})</a>\s*</td>\s*<td>([^<]+)</td>', r.text)
+print(f"\n  Últimas 5 datas com tamanho:")
+for data, tam in tamanhos[:5]:
+    print(f"    {data} -> {tam.strip()}")
+
+# Navegar em uma data específica
+print()
+print("=" * 60)
+print("3. LISTAGEM DE ARQUIVOS DE UMA DATA (2026-04-08)")
+print("=" * 60)
+r = session.get(f"{BASE}/index.php?p=2026-04-08")
+print(f"  GET {BASE}/index.php?p=2026-04-08 -> {r.status_code} ({len(r.text)} bytes)")
+
+# Extrair links de arquivos
+arquivos = re.findall(r'href="([^"]+)"[^>]*>\s*([^<]+)\s*</a>\s*</td>\s*<td>([^<]*)</td>\s*<td>([^<]*)</td>', r.text)
+print(f"  Arquivos/links encontrados: {len(arquivos)}")
+
+if not arquivos:
+    # Tentar padrão alternativo
+    arquivos = re.findall(r'href="([^"]+)"', r.text)
+    print(f"  Todos os links: {len(arquivos)}")
+    for link in arquivos[:20]:
+        print(f"    {link}")
+else:
+    for link, nome, tam, data_mod in arquivos[:30]:
+        link = link.strip()
+        nome = nome.strip()
+        tam = tam.strip()
+        data_mod = data_mod.strip()
+        if link and not link.startswith("http") and not link.startswith("#") and not link.startswith("javascript"):
+            full_url = link if link.startswith("http") else BASE + "/" + link.lstrip("/")
+            print(f"    {nome} | {tam} | {data_mod} | {full_url}")
+
+# Verificar se há subpastas (seções DOU)
+print()
+print("=" * 60)
+print("4. EXPLORANDO SUBPASTAS (seções DOU)")
+print("=" * 60)
+# Links que parecem subpastas
+subpastas = re.findall(r'href="(index\.php\?p=[^"]+)"', r.text)
+for sp in subpastas[:10]:
+    full = BASE + "/" + sp.lstrip("/") if not sp.startswith("http") else sp
+    print(f"  Subpasta: {sp}")
+
+# Tentar acessar subpasta (ex: seção 1)
+for sp in subpastas:
+    if sp != "index.php?p=2026-04-08" and sp != "index.php?p=":
+        full = BASE + "/" + sp.lstrip("/") if not sp.startswith("http") else sp
+        print(f"\n  GET {full} -> ", end="")
+        r2 = session.get(full)
+        print(f"{r2.status_code} ({len(r2.text)} bytes)")
+        # Extrair arquivos dessa subpasta
+        sub_arquivos = re.findall(r'href="([^"]+\.zip[^"]*)"', r2.text)
+        if not sub_arquivos:
+            sub_arquivos = re.findall(r'href="([^"]+\.xml[^"]*)"', r2.text)
+        if not sub_arquivos:
+            sub_arquivos = re.findall(r'href="([^"]+)"', r2.text)
+        print(f"  Links encontrados: {len(sub_arquivos)}")
+        for sa in sub_arquivos[:10]:
+            if sa and not sa.startswith("#") and not sa.startswith("javascript"):
+                sa_full = sa if sa.startswith("http") else BASE + "/" + sa.lstrip("/")
+                print(f"    {sa_full}")
+        break  # só a primeira subpasta
+
+# Tentar padrões de URL conhecidos para XML/PDF
+print()
+print("=" * 60)
+print("5. TESTANDO PADRÕES DE URL PARA DOWNLOAD")
+print("=" * 60)
+padroes = [
+    f"{BASE}/index.php?p=2026-04-08&d=1",  # seção 1
+    f"{BASE}/index.php?p=2026-04-08&d=2",  # seção 2
+    f"{BASE}/index.php?p=2026-04-08&d=3",  # seção 3
+    f"{BASE}/index.php?p=2026-04-08&s=1",  # seção 1 (alt)
+    f"{BASE}/index.php?p=2026-04-08&secao=1",
+    f"{BASE}/download.php?p=2026-04-08",
+    f"{BASE}/api/dou/2026-04-08",
+]
+for url in padroes:
+    r = session.get(url, allow_redirects=False)
+    print(f"  {url} -> {r.status_code}")
+    if r.status_code == 302:
+        print(f"    Location: {r.headers.get('location', 'N/A')}")
+
+# Verificar a página de ajuda para mais endpoints
+print()
+print("=" * 60)
+print("6. PÁGINA DE AJUDA")
+print("=" * 60)
+r = session.get(f"{BASE}/ajuda.php")
+print(f"  GET {BASE}/ajuda.php -> {r.status_code} ({len(r.text)} bytes)")
+# Extrair URLs da página de ajuda
+help_links = re.findall(r'href="([^"]+)"', r.text)
+for hl in help_links:
+    if hl and not hl.startswith("#") and not hl.startswith("javascript") and "google" not in hl:
+        full = hl if hl.startswith("http") else BASE + "/" + hl.lstrip("/")
+        print(f"    {full}")
+
+# Minha conta
+print()
+print("=" * 60)
+print("7. MINHA CONTA")
+print("=" * 60)
+r = session.get(f"{BASE}/minha-conta.php")
+print(f"  GET {BASE}/minha-conta.php -> {r.status_code} ({len(r.text)} bytes)")
+# Mostrar conteúdo relevante
+if r.status_code == 200:
+    # Extrair formulários e inputs
+    forms = re.findall(r'<form[^>]*action="([^"]*)"', r.text)
+    inputs = re.findall(r'<input[^>]*name="([^"]*)"[^>]*>', r.text)
+    print(f"  Formulários: {forms}")
+    print(f"  Inputs: {inputs}")
+
+print()
+print("=" * 60)
+print("8. COOKIES FINAIS DA SESSÃO")
+print("=" * 60)
+for c in session.cookies:
+    print(f"  {c.name} = {c.value[:40]}... (domain={c.domain}, path={c.path})")
+</file>
+
+<file path="inlabs_login.py">
+"""Script de login no portal INLABS (Imprensa Nacional) via terminal."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import requests
+from dotenv import load_dotenv
+
+ACCESS_URL = "https://inlabs.in.gov.br/acessar.php"
+LOGIN_URL = "https://inlabs.in.gov.br/logar.php"
+INDEX_URL = "https://inlabs.in.gov.br/index.php?p="
+
+
+def login() -> requests.Session:
+    load_dotenv()
+
+    email = __import__("os").getenv("INLABS_EMAIL", "")
+    password = __import__("os").getenv("INLABS_PASSWORD", "")
+
+    if not email or not password:
+        print("Erro: configure INLABS_EMAIL e INLABS_PASSWORD no arquivo .env")
+        sys.exit(1)
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/146.0.0.0 Safari/537.36"
+        ),
+    })
+
+    # Passo 1: acessar a página de login para pegar cookies de sessão (PHPSESSID, etc.)
+    print("Acessando página de login...")
+    resp = session.get(ACCESS_URL)
+    print(f"  Página de login: {resp.status_code} ({len(resp.cookies)} cookies)")
+
+    # Passo 2: POST com credenciais
+    print(f"Logando como {email}...")
+    resp = session.post(
+        LOGIN_URL,
+        data={"email": email, "password": password},
+        allow_redirects=True,
+    )
+
+    if resp.status_code == 200 and "Sair" in resp.text:
+        print("Login realizado com sucesso!")
+        session_cookie = session.cookies.get("inlabs_session_cookie")
+        if session_cookie:
+            print(f"  Sessão: inlabs_session_cookie={session_cookie[:20]}...")
+        return session
+
+    if "Manutenção" in resp.text or resp.status_code == 502:
+        print("Erro: sistema em manutenção (502). Tente novamente mais tarde.")
+        sys.exit(1)
+
+    if "inválid" in resp.text.lower() or "incorret" in resp.text.lower():
+        print("Erro: credenciais inválidas.")
+        sys.exit(1)
+
+    print(f"Erro inesperado: status {resp.status_code}")
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    session = login()
+    resp = session.get(INDEX_URL)
+    print(f"Página principal: {resp.status_code} ({len(resp.text)} bytes)")
+</file>
+
+<file path="main.py">
+"""CLI para download de arquivos DOU via portal INLABS."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from inlabs_client import InlabsClient, InlabsError
+
+
+def cmd_dates(client: InlabsClient, args: argparse.Namespace) -> None:
+    """Lista datas disponíveis."""
+    dates = client.list_available_dates()
+    limit = args.limit or len(dates)
+    print(f"Datas disponíveis ({min(limit, len(dates))} de {len(dates)}):")
+    for d in dates[:limit]:
+        print(f"  {d}")
+
+
+def cmd_files(client: InlabsClient, args: argparse.Namespace) -> None:
+    """Lista arquivos de uma data."""
+    files = client.list_files(args.date)
+    print(f"Arquivos de {args.date}: {len(files)}")
+    for f in files:
+        print(f"  {f['name']:50s} {f['size']:>12s}  {f['modified']}")
+
+
+def cmd_pdf(client: InlabsClient, args: argparse.Namespace) -> None:
+    """Download de PDFs."""
+    sections = args.sections.split(",") if args.sections else None
+    print(f"Baixando PDFs de {args.date}...")
+    downloaded = client.download_pdf(
+        args.date,
+        sections=sections,  # type: ignore[arg-type]
+        output_dir=args.output,
+        include_extras=not args.no_extras,
+    )
+    if downloaded:
+        print(f"\n{len(downloaded)} arquivo(s) baixado(s).")
+    else:
+        print("\nNenhum arquivo encontrado para essa data.")
+
+
+def cmd_zip(client: InlabsClient, args: argparse.Namespace) -> None:
+    """Download de ZIPs (XML)."""
+    sections = args.sections.split(",") if args.sections else None
+    print(f"Baixando ZIPs de {args.date}...")
+    downloaded = client.download_zip(
+        args.date,
+        sections=sections,  # type: ignore[arg-type]
+        output_dir=args.output,
+    )
+    if downloaded:
+        print(f"\n{len(downloaded)} arquivo(s) baixado(s).")
+    else:
+        print("\nNenhum arquivo encontrado para essa data.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Download de arquivos DOU via portal INLABS"
+    )
+    parser.add_argument(
+        "-o", "--output", default="downloads", help="Diretório de saída (padrão: downloads)"
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # dates
+    subparsers.add_parser("dates", help="Lista datas disponíveis").add_argument(
+        "-n", "--limit", type=int, default=10, help="Número de datas (padrão: 10)"
+    )
+
+    # files
+    sub_files = subparsers.add_parser("files", help="Lista arquivos de uma data")
+    sub_files.add_argument("date", help="Data no formato YYYY-MM-DD")
+
+    # pdf
+    sub_pdf = subparsers.add_parser("pdf", help="Download de PDFs assinados")
+    sub_pdf.add_argument("date", help="Data no formato YYYY-MM-DD")
+    sub_pdf.add_argument(
+        "-s", "--sections", help="Seções separadas por vírgula (do1,do2,do3)"
+    )
+    sub_pdf.add_argument("--no-extras", action="store_true", help="Não baixar edições extras")
+
+    # zip
+    sub_zip = subparsers.add_parser("zip", help="Download de ZIPs (XML)")
+    sub_zip.add_argument("date", help="Data no formato YYYY-MM-DD")
+    sub_zip.add_argument(
+        "-s", "--sections", help="Seções separadas por vírgula (DO1,DO2,DO3,DO1E,DO2E,DO3E)"
+    )
+
+    args = parser.parse_args()
+
+    try:
+        client = InlabsClient.from_env()
+        client.login()
+        print(f"Autenticado como {client.session_cookie[:20]}...\n")
+
+        if args.command == "dates":
+            cmd_dates(client, args)
+        elif args.command == "files":
+            cmd_files(client, args)
+        elif args.command == "pdf":
+            cmd_pdf(client, args)
+        elif args.command == "zip":
+            cmd_zip(client, args)
+
+    except InlabsError as e:
+        print(f"Erro: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="README.md">
+
+</file>
+
+<file path=".gitignore">
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables
+.env
+
+# Agent session state
+.omc/
+downloads/
+</file>
+
+<file path="inlabs_client.py">
+"""Cliente para autenticação e download de arquivos do portal INLABS (DOU).
+
+Usa Playwright (headless) para o login, pois o servidor bloqueia
+login via requests/curl com fingerprinting TLS. Após login,
+usa requests para listagem e downloads (mais eficiente).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Literal
+
+import requests
+from dotenv import load_dotenv
+
+BASE_URL = "https://inlabs.in.gov.br"
+ACCESS_URL = f"{BASE_URL}/acessar.php"
+LOGIN_URL = f"{BASE_URL}/logar.php"
+INDEX_URL = f"{BASE_URL}/index.php?p="
+
+# Header obrigatório pelo INLABS para downloads (hex de "script")
+ORIGEM_HEADER = "736372697074"
+
+# Seções DOU disponíveis
+PdfSection = Literal["do1", "do2", "do3"]
+ZipSection = Literal["DO1", "DO2", "DO3", "DO1E", "DO2E", "DO3E"]
+
+PDF_SECTIONS: list[PdfSection] = ["do1", "do2", "do3"]
+ZIP_SECTIONS: list[ZipSection] = ["DO1", "DO2", "DO3", "DO1E", "DO2E", "DO3E"]
+PDF_EXTRA_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+class InlabsError(Exception):
+    """Erro na comunicação com o portal INLABS."""
+
+
+class InlabsClient:
+    """Cliente para interação com o portal INLABS."""
+
+    def __init__(self, email: str, password: str) -> None:
+        self._email = email
+        self._password = password
+        self._session = requests.Session()
+        self._session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/146.0.0.0 Safari/537.36"
+            ),
+        })
+
+    @classmethod
+    def from_env(cls) -> InlabsClient:
+        """Cria cliente a partir de variáveis de ambiente (.env)."""
+        load_dotenv()
+        import os
+
+        email = os.getenv("INLABS_EMAIL", "")
+        password = os.getenv("INLABS_PASSWORD", "")
+        if not email or not password:
+            raise InlabsError(
+                "Configure INLABS_EMAIL e INLABS_PASSWORD no .env"
+            )
+        return cls(email, password)
+
+    @property
+    def session_cookie(self) -> str | None:
+        """Retorna o cookie de sessão INLABS."""
+        return self._session.cookies.get("inlabs_session_cookie")
+
+    def login(self) -> None:
+        """Autentica no portal INLABS via Playwright headless. Retry automático."""
+        from playwright.sync_api import sync_playwright
+
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self._do_login_playwright()
+                return
+            except Exception as e:
+                if attempt < max_attempts:
+                    print(f"  Tentativa {attempt}/{max_attempts} falhou: {e}. Retentando...")
+                else:
+                    raise
+
+    def _do_login_playwright(self) -> None:
+        """Executa login via Playwright headless."""
+        from playwright.sync_api import sync_playwright
+
+        print("Autenticando via browser headless...")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/146.0.0.0 Safari/537.36"
+                ),
+            )
+            page = context.new_page()
+
+            try:
+                # Acessar página de login
+                page.goto(ACCESS_URL, wait_until="networkidle", timeout=30000)
+
+                # Verificar se não está em manutenção
+                if "Manutenção" in page.content():
+                    browser.close()
+                    raise InlabsError("Sistema em manutenção.")
+
+                # O formulário de "Acessar" é o segundo form (índice 1)
+                login_form = page.locator("form").nth(1)
+                login_form.locator('input[name="email"]').fill(self._email)
+                login_form.locator('input[name="password"]').fill(self._password)
+                login_form.locator('input[type="submit"]').click()
+
+                # Aguardar navegação completar
+                page.wait_for_load_state("networkidle", timeout=30000)
+
+                # Verificar login
+                content = page.content()
+                if "Sair" not in content:
+                    if "Manutenção" in content:
+                        raise InlabsError("Sistema em manutenção.")
+                    if "inválid" in content.lower() or "incorret" in content.lower():
+                        raise InlabsError("Credenciais inválidas.")
+                    raise InlabsError("Falha no login: botão Sair não encontrado.")
+
+                # Extrair cookies e transferir para requests.Session
+                cookies = context.cookies()
+            finally:
+                browser.close()
+
+        for cookie in cookies:
+            self._session.cookies.set(cookie["name"], cookie["value"])
+
+        if not self.session_cookie:
+            raise InlabsError("Cookie de sessão não recebido após login.")
+
+        print(f"Autenticado: {self.session_cookie[:20]}...")
+
+    def list_available_dates(self) -> list[str]:
+        """Retorna lista de datas disponíveis (mais recente primeiro)."""
+        resp = self._session.get(INDEX_URL, timeout=30)
+        if resp.status_code != 200:
+            raise InlabsError(f"Erro ao listar datas: {resp.status_code}")
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "lxml")
+        
+        dates = []
+        for a in soup.find_all("a", href=re.compile(r"\?p=(\d{4}-\d{2}-\d{2})")):
+            match = re.search(r"\?p=(\d{4}-\d{2}-\d{2})", a.get("href", ""))
+            if match:
+                dates.append(match.group(1))
+        return sorted(set(dates), reverse=True)
+
+    def list_files(self, date_str: str) -> list[dict[str, str]]:
+        """Lista arquivos disponíveis para uma data específica.
+
+        Retorna lista de dicts com chaves: name, url, size, modified.
+        """
+        url = f"{INDEX_URL}{date_str}"
+        resp = self._session.get(url, timeout=30)
+        if resp.status_code != 200:
+            raise InlabsError(f"Erro ao listar arquivos de {date_str}: {resp.status_code}")
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "lxml")
+        
+        files = []
+        for a in soup.find_all("a", href=re.compile(r"dl=")):
+            href = a.get("href", "")
+            filename = href.split("dl=")[-1]
+            
+            td_parent = a.find_parent("td")
+            if td_parent:
+                next_tds = td_parent.find_next_siblings("td")
+                size = next_tds[0].get_text(strip=True) if len(next_tds) > 0 else ""
+                modified = next_tds[1].get_text(strip=True) if len(next_tds) > 1 else ""
+            else:
+                size = ""
+                modified = ""
+
+            link = href.replace("&amp;", "&")
+            full_url = f"{BASE_URL}/{link.lstrip('/')}"
+            
+            files.append({
+                "name": filename,
+                "url": full_url,
+                "size": size,
+                "modified": modified,
+            })
+        return files
+
+    def download_pdf(
+        self,
+        date_str: str,
+        sections: list[PdfSection] | None = None,
+        output_dir: str | Path = ".",
+        include_extras: bool = True,
+    ) -> list[Path]:
+        """Download de PDFs assinados do DOU.
+
+        Args:
+            date_str: Data no formato YYYY-MM-DD.
+            sections: Seções a baixar (do1, do2, do3). Padrão: todas.
+            output_dir: Diretório de saída.
+            include_extras: Se True, tenta baixar edições extras (A-Z).
+
+        Returns:
+            Lista de caminhos dos arquivos baixados.
+        """
+        if not self.session_cookie:
+            raise InlabsError("Não autenticado. Chame login() primeiro.")
+
+        sections = sections or PDF_SECTIONS
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        download_headers = {
+            "origem": ORIGEM_HEADER,
+            "Cookie": f"inlabs_session_cookie={self.session_cookie}",
+        }
+
+        d = date_str.replace("-", "_")
+        downloaded: list[Path] = []
+
+        for section in sections:
+            filename = f"{d}_ASSINADO_{section}.pdf"
+            url = f"{INDEX_URL}{date_str}&dl={filename}"
+            path = self._download_file(url, filename, output_dir, download_headers)
+            if path:
+                downloaded.append(path)
+
+            if include_extras:
+                for letter in PDF_EXTRA_LETTERS:
+                    extra_filename = f"{d}_ASSINADO_{section}_extra_{letter}.pdf"
+                    url = f"{INDEX_URL}{date_str}&dl={extra_filename}"
+                    path = self._download_file(
+                        url, extra_filename, output_dir, download_headers
+                    )
+                    if path:
+                        downloaded.append(path)
+
+        return downloaded
+
+    def download_zip(
+        self,
+        date_str: str,
+        sections: list[ZipSection] | None = None,
+        output_dir: str | Path = ".",
+    ) -> list[Path]:
+        """Download de ZIPs com XML do DOU.
+
+        Args:
+            date_str: Data no formato YYYY-MM-DD.
+            sections: Seções a baixar (DO1, DO2, DO3, DO1E, etc.). Padrão: todas.
+            output_dir: Diretório de saída.
+
+        Returns:
+            Lista de caminhos dos arquivos baixados.
+        """
+        if not self.session_cookie:
+            raise InlabsError("Não autenticado. Chame login() primeiro.")
+
+        sections = sections or ZIP_SECTIONS
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        download_headers = {
+            "origem": ORIGEM_HEADER,
+            "Cookie": f"inlabs_session_cookie={self.session_cookie}",
+        }
+
+        downloaded: list[Path] = []
+
+        for section in sections:
+            filename = f"{date_str}-{section}.zip"
+            url = f"{INDEX_URL}{date_str}&dl={filename}"
+            path = self._download_file(url, filename, output_dir, download_headers)
+            if path:
+                downloaded.append(path)
+
+        return downloaded
+
+    def _download_file(
+        self,
+        url: str,
+        filename: str,
+        output_dir: Path,
+        headers: dict[str, str],
+    ) -> Path | None:
+        """Faz download de um arquivo. Retorna o caminho ou None se 404."""
+        resp = self._session.get(url, headers=headers, timeout=120)
+
+        if resp.status_code == 404:
+            return None
+
+        if resp.status_code != 200:
+            print(f"  [ERRO] {filename}: HTTP {resp.status_code}")
+            return None
+
+        # Verificar se recebeu HTML (erro) em vez do arquivo
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            print(f"  [ERRO] {filename}: recebeu HTML em vez do arquivo")
+            return None
+
+        filepath = output_dir / filename
+        filepath.write_bytes(resp.content)
+        size_mb = len(resp.content) / (1024 * 1024)
+        print(f"  [OK] {filename} ({size_mb:.1f} MB)")
+        return filepath
+</file>
+
+<file path="pyproject.toml">
+[project]
+name = "my-dou"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.12.0",
+    "curl-cffi>=0.15.0",
+    "lxml>=5.1.0",
+    "playwright>=1.58.0",
+    "python-dotenv>=1.2.2",
+    "requests>=2.33.1",
+]
+</file>
+
+</files>

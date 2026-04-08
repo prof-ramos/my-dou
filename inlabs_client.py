@@ -30,6 +30,9 @@ PDF_SECTIONS: list[PdfSection] = ["do1", "do2", "do3"]
 ZIP_SECTIONS: list[ZipSection] = ["DO1", "DO2", "DO3", "DO1E", "DO2E", "DO3E"]
 PDF_EXTRA_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
+# Padrão de data YYYY-MM-DD
+DATE_RE = re.compile(r"\?p=(\d{4}-\d{2}-\d{2})")
+
 
 class InlabsError(Exception):
     """Erro na comunicação com o portal INLABS."""
@@ -70,10 +73,24 @@ class InlabsClient:
         return self._session.cookies.get("inlabs_session_cookie")
 
     def login(self) -> None:
-        """Autentica no portal INLABS via Playwright headless."""
+        """Autentica no portal INLABS via Playwright headless. Retry automático."""
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self._do_login_playwright()
+                return
+            except Exception as e:
+                if attempt < max_attempts:
+                    print(f"  Tentativa {attempt}/{max_attempts} falhou: {e}. Retentando...")
+                else:
+                    raise
+
+    def _do_login_playwright(self) -> None:
+        """Executa login via Playwright headless."""
         from playwright.sync_api import sync_playwright
 
         print("Autenticando via browser headless...")
+        cookies: list[dict[str, str]] = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -86,25 +103,36 @@ class InlabsClient:
             )
             page = context.new_page()
 
-            # Acessar página de login
-            page.goto(ACCESS_URL, wait_until="networkidle", timeout=30000)
+            try:
+                # Acessar página de login
+                page.goto(ACCESS_URL, wait_until="networkidle", timeout=30000)
 
-            # O formulário de "Acessar" é o segundo form (índice 1)
-            login_form = page.locator("form").nth(1)
-            login_form.locator('input[name="email"]').fill(self._email)
-            login_form.locator('input[name="password"]').fill(self._password)
-            login_form.locator('input[type="submit"]').click()
+                # Verificar se não está em manutenção
+                if "Manutenção" in page.content():
+                    raise InlabsError("Sistema em manutenção.")
 
-            page.wait_for_url("**/index.php**", timeout=30000)
+                # O formulário de "Acessar" é o segundo form (índice 1)
+                login_form = page.locator("form").nth(1)
+                login_form.locator('input[name="email"]').fill(self._email)
+                login_form.locator('input[name="password"]').fill(self._password)
+                login_form.locator('input[type="submit"]').click()
 
-            # Verificar login
-            if "Sair" not in page.content():
+                # Aguardar navegação completar
+                page.wait_for_load_state("networkidle", timeout=30000)
+
+                # Verificar login
+                content = page.content()
+                if "Sair" not in content:
+                    if "Manutenção" in content:
+                        raise InlabsError("Sistema em manutenção.")
+                    if "inválid" in content.lower() or "incorret" in content.lower():
+                        raise InlabsError("Credenciais inválidas.")
+                    raise InlabsError("Falha no login: botão Sair não encontrado.")
+
+                # Extrair cookies e transferir para requests.Session
+                cookies = context.cookies()
+            finally:
                 browser.close()
-                raise InlabsError("Falha no login: botão Sair não encontrado.")
-
-            # Extrair cookies e transferir para requests.Session
-            cookies = context.cookies()
-            browser.close()
 
         for cookie in cookies:
             self._session.cookies.set(cookie["name"], cookie["value"])
@@ -120,7 +148,14 @@ class InlabsClient:
         if resp.status_code != 200:
             raise InlabsError(f"Erro ao listar datas: {resp.status_code}")
 
-        dates = re.findall(r"index\.php\?p=(\d{4}-\d{2}-\d{2})", resp.text)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "lxml")
+        
+        dates = []
+        for a in soup.find_all("a", href=DATE_RE):
+            match = DATE_RE.search(a.get("href", ""))
+            if match:
+                dates.append(match.group(1))
         return sorted(set(dates), reverse=True)
 
     def list_files(self, date_str: str) -> list[dict[str, str]]:
@@ -133,22 +168,31 @@ class InlabsClient:
         if resp.status_code != 200:
             raise InlabsError(f"Erro ao listar arquivos de {date_str}: {resp.status_code}")
 
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "lxml")
+        
         files = []
-        pattern = re.findall(
-            r'href="([^"]+)"[^>]*>\s*([^<]+)\s*</a>\s*</td>\s*<td>([^<]*)</td>\s*<td>([^<]*)</td>',
-            resp.text,
-        )
-        for link, name, size, modified in pattern:
-            link = link.strip()
-            name = name.strip()
-            if not link or link.startswith(("#", "javascript", "http")):
-                continue
+        for a in soup.find_all("a", href=re.compile(r"dl=")):
+            href = a.get("href", "")
+            filename = href.split("dl=")[-1]
+            
+            td_parent = a.find_parent("td")
+            if td_parent:
+                next_tds = td_parent.find_next_siblings("td")
+                size = next_tds[0].get_text(strip=True) if len(next_tds) > 0 else ""
+                modified = next_tds[1].get_text(strip=True) if len(next_tds) > 1 else ""
+            else:
+                size = ""
+                modified = ""
+
+            link = href.replace("&amp;", "&")
             full_url = f"{BASE_URL}/{link.lstrip('/')}"
+            
             files.append({
-                "name": name,
+                "name": filename,
                 "url": full_url,
-                "size": size.strip(),
-                "modified": modified.strip(),
+                "size": size,
+                "modified": modified,
             })
         return files
 
