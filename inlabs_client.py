@@ -1,10 +1,13 @@
-"""Cliente para autenticação e download de arquivos do portal INLABS (DOU)."""
+"""Cliente para autenticação e download de arquivos do portal INLABS (DOU).
+
+Usa Playwright (headless) para o login, pois o servidor bloqueia
+login via requests/curl com fingerprinting TLS. Após login,
+usa requests para listagem e downloads (mais eficiente).
+"""
 
 from __future__ import annotations
 
 import re
-import time
-from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -18,9 +21,6 @@ INDEX_URL = f"{BASE_URL}/index.php?p="
 
 # Header obrigatório pelo INLABS para downloads (hex de "script")
 ORIGEM_HEADER = "736372697074"
-
-MAX_RETRIES = 3
-RETRY_DELAY = 10  # segundos
 
 # Seções DOU disponíveis
 PdfSection = Literal["do1", "do2", "do3"]
@@ -70,61 +70,49 @@ class InlabsClient:
         return self._session.cookies.get("inlabs_session_cookie")
 
     def login(self) -> None:
-        """Autentica no portal INLABS (2 passos: GET + POST). Retry automático em caso de manutenção."""
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                self._do_login()
-                return
-            except InlabsError as e:
-                if "manutenção" in str(e).lower() and attempt < MAX_RETRIES:
-                    print(f"  Servidor em manutenção, aguardando {RETRY_DELAY}s... (tentativa {attempt}/{MAX_RETRIES})")
-                    time.sleep(RETRY_DELAY)
-                    self._session = requests.Session()
-                    self._session.headers.update({
-                        "User-Agent": (
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/146.0.0.0 Safari/537.36"
-                        ),
-                    })
-                else:
-                    raise
+        """Autentica no portal INLABS via Playwright headless."""
+        from playwright.sync_api import sync_playwright
 
-    def _do_login(self) -> None:
-        """Executa o fluxo de login."""
-        # Passo 1: GET para obter cookies de sessão PHP
-        resp = self._session.get(ACCESS_URL, timeout=30)
-        if resp.status_code != 200:
-            raise InlabsError(
-                f"Erro ao acessar página de login: {resp.status_code}"
+        print("Autenticando via browser headless...")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/146.0.0.0 Safari/537.36"
+                ),
             )
+            page = context.new_page()
 
-        # Passo 2: POST com credenciais
-        resp = self._session.post(
-            LOGIN_URL,
-            data={"email": self._email, "password": self._password},
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
-            allow_redirects=True,
-            timeout=30,
-        )
+            # Acessar página de login
+            page.goto(ACCESS_URL, wait_until="networkidle", timeout=30000)
 
-        if resp.status_code == 200 and "Sair" in resp.text:
-            if not self.session_cookie:
-                raise InlabsError(
-                    "Login aparentou sucesso mas cookie de sessão não foi recebido"
-                )
-            return
+            # O formulário de "Acessar" é o segundo form (índice 1)
+            login_form = page.locator("form").nth(1)
+            login_form.locator('input[name="email"]').fill(self._email)
+            login_form.locator('input[name="password"]').fill(self._password)
+            login_form.locator('input[type="submit"]').click()
 
-        if "Manutenção" in resp.text or resp.status_code == 502:
-            raise InlabsError("Sistema em manutenção (502). Tente novamente mais tarde.")
+            page.wait_for_url("**/index.php**", timeout=30000)
 
-        if "inválid" in resp.text.lower() or "incorret" in resp.text.lower():
-            raise InlabsError("Credenciais inválidas.")
+            # Verificar login
+            if "Sair" not in page.content():
+                browser.close()
+                raise InlabsError("Falha no login: botão Sair não encontrado.")
 
-        raise InlabsError(f"Erro inesperado no login: status {resp.status_code}")
+            # Extrair cookies e transferir para requests.Session
+            cookies = context.cookies()
+            browser.close()
+
+        for cookie in cookies:
+            self._session.cookies.set(cookie["name"], cookie["value"])
+
+        if not self.session_cookie:
+            raise InlabsError("Cookie de sessão não recebido após login.")
+
+        print(f"Autenticado: {self.session_cookie[:20]}...")
 
     def list_available_dates(self) -> list[str]:
         """Retorna lista de datas disponíveis (mais recente primeiro)."""
