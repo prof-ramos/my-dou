@@ -5,10 +5,31 @@
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Package Manager: uv](https://img.shields.io/badge/package%20manager-uv-6140cc.svg)](https://github.com/astral-sh/uv)
 [![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen.svg)](tests/)
+[![Status](https://img.shields.io/badge/status-WAF%20blocked-red.svg)]()
+
+## ⚠️ AVISO IMPORTANTE: WAF do INLABS
+
+**Este projeto está temporariamente inoperacional.**
+
+O portal INLABS implementou um WAF (Web Application Firewall) muito agressivo que bloqueia:
+- Requests diretas (curl, requests, curl-cffi)
+- Playwright em modo headless
+- Acesso originado de VPS/servidores
+
+### Possíveis Soluções (NÃO TESTADAS)
+
+1. **Executar em máquina local** (não VPS)
+2. **Usar Playwright em modo não-headless** (requiere GUI/X11)
+3. **Proxy residencial** (data center IPs são bloqueados)
+4. **API oficial** (se disponível no futuro)
+
+Se você encontrar uma solução que funcione, por favor abra um PR.
+
+---
 
 Ferramenta CLI para download automatizado de arquivos do Diário Oficial da União (DOU) via portal INLABS (Imprensa Nacional).
 
-## ✨ Funcionalidades
+## ✨ Funcionalidades (QUANDO OPERACIONAL)
 
 - **Download Híbrido:** Usa Playwright para autenticação (bypass de TLS fingerprinting) e `requests` para downloads eficientes.
 - **Resiliência:** Extração de dados via BeautifulSoup (DOM) em vez de Regex.
@@ -21,28 +42,31 @@ Ferramenta CLI para download automatizado de arquivos do Diário Oficial da Uni�
 
 - Python >= 3.13
 - [uv](https://github.com/astral-sh/uv) (gerenciador de pacotes)
+- **NÃO funciona em VPS** devido ao WAF do INLABS
 
 ## 🚀 Instalação
 
 1. Clone o repositório:
-   ```bash
-   git clone https://github.com/prof-ramos/my-dou.git
-   cd my-dou
-   ```
+```bash
+git clone https://github.com/prof-ramos/my-dou.git
+cd my-dou
+```
 
-2. Instale as dependências e configure o ambiente:
-   ```bash
-   uv sync
-   uv run playwright install chromium
-   ```
+2. Instale as dependências:
+```bash
+uv sync
+uv run playwright install chromium
+```
 
 3. Configure as credenciais no arquivo `.env`:
-   ```bash
-   echo "INLABS_EMAIL=seu_email@exemplo.com" > .env
-   echo "INLABS_PASSWORD=sua_senha" >> .env
-   ```
+```bash
+echo "INLABS_EMAIL=seu_email@exemplo.com" > .env
+echo "INLABS_PASSWORD=sua_senha" >> .env
+```
 
 ## 📖 Uso
+
+⚠️ **Os comandos abaixo NÃO funcionarão até que o WAF seja contornado.**
 
 ### Listar datas disponíveis
 ```bash

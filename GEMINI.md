@@ -1,9 +1,35 @@
 # Projeto: my-dou (DOU Downloader)
 
-## Visão Geral
+## ⚠️ STATUS: INOPERACIONAL - WAF do INLABS
+
+**Última verificação:** 2026-04-08  
+**Problema:** O portal INLABS (`inlabs.in.gov.br`) implementou um WAF que bloqueia TODAS as tentativas de acesso automatizado.
+
+### Bloqueios Confirmados
+
+| Método | Status | Detalhes |
+|--------|--------|----------|
+| `requests` | ❌ Bloqueado | Retorna "Request Rejected" |
+| `curl` | ❌ Bloqueado | Mesmo com User-Agent realista |
+| `curl-cffi` | ❌ Bloqueado | Testado com chrome/edge/safari |
+| Playwright headless | ❌ Bloqueado | Mesmo com anti-detect |
+| Acesso de VPS | ❌ Bloqueado | Data center IPs filtrados |
+
+### Possíveis Workarounds (NÃO TESTADOS)
+
+1. **Executar em máquina local** com Playwright não-headless
+2. **Xvfb** (virtual frame buffer) + Playwright no servidor
+3. **Proxy residencial** (não data center)
+4. **API oficial** (se/when disponível)
+
+---
+
+## Visão Geral (QUANDO FUNCIONANDO)
+
 O **my-dou** é uma ferramenta de automação para download de arquivos do Diário Oficial da União (DOU) através do portal INLABS (Imprensa Nacional). O projeto foca em extrair PDFs assinados e arquivos XML (em formato ZIP) de forma programática.
 
 ### Arquitetura e Tecnologias
+
 - **Linguagem:** Python (>= 3.13)
 - **Gerenciador de Pacotes:** `uv` (utiliza `pyproject.toml` e `uv.lock`)
 - **Autenticação:** Híbrida. Usa **Playwright (Chromium)** em modo headless para realizar o login e contornar proteções de fingerprinting TLS, transferindo os cookies de sessão para o `requests`.
@@ -12,6 +38,7 @@ O **my-dou** é uma ferramenta de automação para download de arquivos do Diár
 - **Configuração:** Variáveis de ambiente via `.env` (usando `python-dotenv`).
 
 ## Estrutura de Arquivos Principal
+
 - `main.py`: Ponto de entrada da CLI (comandos: `dates`, `files`, `pdf`, `zip`, `mre`).
 - `inlabs_client.py`: Core do projeto. Contém a classe `InlabsClient` que gerencia a sessão, login via Playwright e lógica de download.
 - `xml_processor.py`: Módulo especializado em processamento de arquivos XML do DOU, incluindo busca por padrões (como publicações do MRE).
@@ -31,7 +58,10 @@ uv run playwright install chromium
 uv run pytest
 ```
 
-### Execução da CLI
+### Execução da CLI (BLOQUEADA POR WAF)
+
+⚠️ **Não funcionarão até que o WAF seja contornado.**
+
 ```bash
 # Listar as últimas 10 datas disponíveis
 uv run python main.py dates
@@ -50,10 +80,12 @@ uv run python main.py mre 2026-04-08 --download
 ```
 
 ## Convenções de Desenvolvimento
+
 - **Python:** Sempre use `from __future__ import annotations`.
 - **Tipagem:** Utilize Type Hints em todas as funções e métodos públicos.
 - **Linting:** Prefira `ruff` para formatação e linting.
 - **Segurança:** Nunca versionar o arquivo `.env` ou a pasta `.omc/`. As credenciais `INLABS_EMAIL` e `INLABS_PASSWORD` devem ser mantidas localmente.
 
 ## Integrações MCP
+
 - **Context7:** Utilize o MCP `context7-mcp` para consultar documentações de bibliotecas como `playwright`, `curl-cffi` ou `requests` quando necessário.
